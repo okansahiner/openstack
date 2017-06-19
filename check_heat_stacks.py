@@ -80,11 +80,11 @@ def printEnvInfo(ip, user, opass, proj):
 
 
 def main():
-	osp_ip=""
-	osp_user=""
-	osp_pass=""
-	osp_proj="lera-"
-	printEnvInfo(osp_ip, osp_user, osp_pass, osp_proj)
+	openstack_ip=""
+    project_user_name=""
+    project_user_pass=""
+	project_name=""
+	printEnvInfo(openstack_ip, project_user_name, project_user_pass, project_name)
 	
 if __name__ == "__main__":
     main()

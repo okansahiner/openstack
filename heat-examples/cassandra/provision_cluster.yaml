@@ -1,0 +1,419 @@
+heat_template_version: 2016-04-08
+description: |
+  This heat template is used to provision basic cloud images
+  with desired configuration.
+
+#                 #
+#   Parameters    #
+#                 #
+
+parameters:
+  cassandra_cluster_name:
+    type: string
+  first_seed_internal_ip:
+    type: string
+  second_seed_internal_ip:
+    type: string
+  cassandra_cluster_vip:
+    type: string
+  cassandra.tar.gz_file_nfs_mount_point:
+    type: string
+    description: nfsserver:/path/to/targzfile/
+  domain:
+    type: string
+  ns1:
+    type: string
+  ns2:
+    type: string
+  ntp1:
+    type: string
+  external_network_name:
+    type: string
+  internal_network_name:
+    type: string
+  internal_network_subnet_name:
+    type: string
+  security_group:
+    type: string
+  key_pair_name:
+    type: string
+  flavor_name:
+    type: string
+  image_name:
+    type: string
+
+resources:
+
+#                
+#   Generate 4 length string for cassandra seed and node hostnames generation   
+#                
+  name_gen_seed1:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+
+  name_gen_seed2:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+  name_gen_node1:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+  name_gen_node2:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+#                 
+#   Creation of LB Pools, Monitors and VIPs for  Seeds and Nodes
+#                 
+
+  monitor:
+    type: OS::Neutron::HealthMonitor
+    properties:
+      type: TCP
+      delay: 15
+      max_retries: 5
+      timeout: 10
+      
+
+  lb_cassandra_pool:
+    type: OS::Neutron::Pool
+    properties:
+      name: 
+        str_replace:
+          template: $PART_CL-cassandra-lb
+          params:
+            $PART_CL: {get_param: cassandra_cluster_name }
+      protocol: TCP
+      subnet_id: { get_param: internal_network_subnet_name }
+      lb_method: LEAST_CONNECTIONS
+      monitors: [ { get_resource: monitor } ]      
+      vip:
+        address: { get_param: cassandra_cluster_vip }
+        description: Front-end virtual IP (VIP)
+        protocol_port: 9042
+        
+
+  lb_cassandra_lbaas:
+    type: OS::Neutron::LoadBalancer
+    properties: 
+      pool_id: { get_resource: lb_cassandra_pool }
+      protocol_port: 9042
+            
+
+#                 
+#   Adding All Cassandra instances behind Load Balancers
+#      
+      
+  member_seed1:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_cassandra_pool }
+      address: {get_attr: [seed1, first_address]}
+      protocol_port: 9042
+      
+  member_seed2:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_cassandra_pool }
+      address: {get_attr: [seed2, first_address]}
+      protocol_port: 9042 
+                 
+  member_node1:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_cassandra_pool }
+      address: {get_attr: [node1, first_address]}
+      protocol_port: 9042 
+      
+  member_node2:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_cassandra_pool }
+      address: {get_attr: [node2, first_address]}
+      protocol_port: 9042       
+      
+#                 
+#   Floating IP allocation for Seeds
+#                 
+
+  floating_ip_lb_cassandra:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_param: external_network_name }
+
+  floating_ip_seed1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }
+      
+  floating_ip_seed2:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }
+      
+
+
+#                 
+#   Linking floating ips with seeds
+#                 
+
+  association_lb_cassandra:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ip_lb_cassandra }
+      port_id: { get_attr: [  lb_cassandra_pool, vip, port_id ] }
+
+  association_seed1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_seed1 }   
+      server_id: { get_resource: seed1 }
+      
+  association_seed2:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_seed2}   
+      server_id: { get_resource: seed2 }
+      
+
+#                 
+#   Internal Ip allocations; 
+#   static ips for seeds, 
+#   others getting ip from openstack dhcp
+#                 
+
+  instance_port_seed1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name }
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: first_seed_internal_ip} } ]
+
+  instance_port_seed2:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name }
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: second_seed_internal_ip} } ]
+
+  instance_port_node1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }     
+
+  instance_port_node2:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }     
+
+
+#                 
+#   Server Provisions
+#                 
+
+  seed1:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: cassandra-seed-1
+      name: 
+        str_replace:
+          template: $PART_CL-seed-1
+          params:
+            $PART_CL: {get_param: cassandra_cluster_name }
+      flavor: { get_param: flavor_name } 
+      image: { get_param: image_name } 
+      networks:
+        - port: { get_resource: instance_port_seed1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_cassandra
+   
+       
+  seed2:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: cassandra-seed-2
+      name: 
+        str_replace:
+          template: $PART_CL-seed-2
+          params:
+            $PART_CL: {get_param: cassandra_cluster_name }
+      flavor: { get_param: flavor_name } 
+      image: { get_param: image_name } 
+      networks:
+        - port: { get_resource: instance_port_seed2 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_cassandra
+             
+  node1:
+    type: OS::Nova::Server
+    depends_on: [ seed1, seed2 ]
+    properties:
+      metadata:
+        type: cassandra-node
+      name: 
+        str_replace:
+          template: $PART_CL-node-$RANDNUM
+          params:
+            $PART_CL: {get_param: cassandra_cluster_name }
+            $RANDNUM: { get_resource: name_gen_node1 }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_node1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_cassandra
+       
+  node2:
+    type: OS::Nova::Server
+    depends_on: [  seed1, seed2 ]
+    properties:
+      metadata:
+        type: cassandra-node
+      name: 
+        str_replace:
+          template: $PART_CL-node-$RANDNUM
+          params:
+            $PART_CL: {get_param: cassandra_cluster_name }
+            $RANDNUM: { get_resource: name_gen_node2 }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_node2 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_cassandra
+       
+
+#                 
+#   Instances Customization for cassandra
+#                 
+  
+  cloud_init_userdata_cassandra:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_cassandra}
+
+  cloud_config_cassandra:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __seed1ip__: {get_param: first_seed_internal_ip }
+               __seed2ip__: {get_param: second_seed_internal_ip }
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __clustername__: { get_param: cassandra_cluster_name }
+               __mountpoint__: {get_param: cassandra.tar.gz_file_nfs_mount_point }
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                APP_PATH="/home/app"
+                CSUSER_PATH="$APP_PATH/cassandra"
+                CSDB_PATH="/home/db/cassandra"
+                CAS_HOME="$CSUSER_PATH/apache-cassandra"
+                JAVA_PATH="$CSUSER_PATH/jdk1.8/jre"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                mkdir -p $CSDB_PATH/data/cdc_raw $CSDB_PATH/data/commitlog $CSDB_PATH/data/saved_caches $CSDB_PATH/data/hints
+                mkdir -p $APP_PATH
+                useradd  -md $CSUSER_PATH cassandra
+                mount __mountpoint__ /mnt 
+                tar zxf /mnt/apache-cassandra.tar.gz -C $CSUSER_PATH
+                tar zxf /mnt/jdk.tar.gz -C $CSUSER_PATH
+                cp /mnt/metrics-graphite-3.1.0.jar $CSUSER_PATH/apache-cassandra/lib/
+                cp /mnt/influxdb.yaml $CSUSER_PATH/apache-cassandra/conf/
+                umount /mnt
+                echo 'JVM_OPTS="$JVM_OPTS -Dcassandra.metricsReporterConfigFile=influxdb.yaml" '  >>  $CSUSER_PATH/apache-cassandra/conf/cassandra-env.sh
+                rm -fv $CSUSER_PATH/apache-cassandra/conf/cassandra-topology.properties    
+                sed -i 's/securerandom.source=file:\/dev\/random/securerandom.source=file:\/dev\/urandom/g' $JAVA_PATH/lib/security/java.security
+                sed -i "s/cluster_name: 'Test Cluster'/cluster_name: '__clustername__'/g" $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                sed -i 's/          - seeds: "127.0.0.1"/          - seeds: "__seed1ip__,__seed2ip__"/g' $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                sed -i "s/listen_address: localhost/listen_address: $IPADDR/g" $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                sed -i "s/rpc_address: localhost/rpc_address: $IPADDR/g" $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                sed -i 's/endpoint_snitch: SimpleSnitch/endpoint_snitch: GossipingPropertyFileSnitch/g'   $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                sed -i 's/dc=dc1/dc=DataCenter1/g'  $CSUSER_PATH/apache-cassandra/conf/cassandra-rackdc.properties        
+                sed -i 's/rack=rack1/rack=Rack1/g'  $CSUSER_PATH/apache-cassandra/conf/cassandra-rackdc.properties        
+                sed -i "s/changeme/$(hostname -s)/g" $CSUSER_PATH/apache-cassandra/conf/influxdb.yaml 
+                echo "auto_bootstrap: false" >>  $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                echo "hints_directory: $CSDB_PATH/data/hints" >>  $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                echo -e "data_file_directories:\n     -  $CSDB_PATH/data/data" >> $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                echo "cdc_raw_directory: $CSDB_PATH/data/cdc_raw" >> $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                echo "commitlog_directory: $CSDB_PATH/data/commitlog" >> $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml
+                echo "saved_caches_directory: $CSDB_PATH/data/saved_caches" >> $CSUSER_PATH/apache-cassandra/conf/cassandra.yaml 
+                echo -e "JAVA_HOME=$JAVA_PATH \n\
+                CASSANDRA_HOME=$CAS_HOME\n\
+                PATH=$PATH:$JAVA_PATH/bin:$CAS_HOME/bin\n\
+                export PATH \n\n\
+                export CASSANDRA_HOME\n\
+                export JAVA_HOME \n
+                " >> $CSUSER_PATH/.bashrc
+                chown cassandra:cassandra -R $CSUSER_PATH
+                chown cassandra:cassandra -R $CSDB_PATH                
+                sudo -H -i -u cassandra bash -c "$CSUSER_PATH/apache-cassandra/bin/cassandra"
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+       
+ 
