@@ -1,0 +1,1062 @@
+heat_template_version: 2016-04-08
+description: |
+  This heat template is used to provision basic cloud images
+  with desired configuration.
+
+#                 #
+#   Parameters    #
+#                 #
+
+parameters:
+  esearch_cluster_name:
+    type: string
+  first_master_internal_ip:
+    type: string
+  second_master_internal_ip:
+    type: string
+  third_master_internal_ip:
+    type: string
+  ES_DATA_VIP:
+    type: string
+  ES_INDEX_VIP:
+    type: string
+  java_heap_space:
+    type: string
+    description: Xmx and Xms size of elastic (i.e. 768m)
+  elastic.tar.gz_file_nfs_mount_point:
+    type: string
+    description: nfsserver:/path/to/targzfile/
+  logstash.tar.gz_file_nfs_mount_point:
+    type: string
+    description: nfsserver:/path/to/targzfile/
+  kibana.tar.gz_file_nfs_mount_point:
+    type: string
+    description: nfsserver:/path/to/targzfile/
+  domain:
+    type: string
+  ns1:
+    type: string
+  ns2:
+    type: string
+  ntp1:
+    type: string
+  external_network_name:
+    type: string
+  internal_network_name:
+    type: string
+  internal_network_subnet_name:
+    type: string
+  security_group:
+    type: string
+  key_pair_name:
+    type: string
+  flavor_name:
+    type: string
+  image_name:
+    type: string
+
+resources:
+#                
+#   Create wait condition for Elastic Index nodes
+#                
+  wait_condition:
+    type: OS::Heat::WaitCondition
+    properties:
+      handle: {get_resource: wait_handle}      
+      timeout: 600
+
+  wait_handle:
+    type: OS::Heat::WaitConditionHandle
+
+#                
+#   Generate 4 length string for ES Data and Index hostname generation   
+#                
+  name_gen_data1:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+
+  name_gen_data2:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+  name_gen_data3:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+  name_gen_index1:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+  name_gen_index2:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+
+#                 
+#   Creation of LB Pools, Monitors and VIPs for ES Data Nodes and Index Nodes
+#                 
+
+  monitor:
+    type: OS::Neutron::HealthMonitor
+    properties:
+      type: TCP
+      delay: 15
+      max_retries: 5
+      timeout: 10
+      
+
+  lb_data_pool:
+    type: OS::Neutron::Pool
+    properties:
+      name: 
+        str_replace:
+          template: $PART_CL-datalb
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      protocol: TCP
+      subnet_id: { get_param: internal_network_subnet_name }
+      lb_method: LEAST_CONNECTIONS
+      monitors: [ { get_resource: monitor } ]      
+      vip:
+        name: front_vip
+        address: { get_param: ES_DATA_VIP }
+        description: Front-end virtual IP (VIP)
+        protocol_port: 9200
+        
+  lb_index_pool:
+    type: OS::Neutron::Pool
+    properties:
+      name: 
+        str_replace:
+          template: $PART_CL-indexlb
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      protocol: TCP
+      subnet_id: { get_param: internal_network_subnet_name }
+      lb_method: LEAST_CONNECTIONS
+      monitors: [ { get_resource: monitor } ]      
+      vip:
+        name: front_vip
+        address: { get_param: ES_INDEX_VIP }
+        description: Front-end virtual IP (VIP)
+        protocol_port: 9200        
+
+  lb_data_lbaas:
+    type: OS::Neutron::LoadBalancer
+    properties: 
+      pool_id: { get_resource: lb_data_pool }
+      protocol_port: 9200   
+            
+  lb_index_lbaas:
+    type: OS::Neutron::LoadBalancer
+    properties: 
+      pool_id: { get_resource: lb_index_pool }
+      protocol_port: 9200                     
+
+#                 
+#   Adding ES Data and Index nodes behind Load Balancers
+#      
+      
+  member_data1:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_data_pool }
+      address: {get_attr: [data1, first_address]}
+      protocol_port: 9200
+      
+  member_data2:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_data_pool }
+      address: {get_attr: [data2, first_address]}
+      protocol_port: 9200 
+                 
+  member_data3:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_data_pool }
+      address: {get_attr: [data3, first_address]}
+      protocol_port: 9200
+      
+  member_index1:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_index_pool }
+      address: {get_attr: [index1, first_address]}
+      protocol_port: 9200   
+      
+  member_index2:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_resource: lb_index_pool }
+      address: {get_attr: [index2, first_address]}
+      protocol_port: 9200                                                                   
+      
+#                 
+#   Floating IP allocation for ES master nodes, kibana and logstash
+#                 
+      
+  floating_ip_master1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }
+      
+  floating_ip_master2:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }
+      
+  floating_ip_master3:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }            
+
+  floating_ip_kibana1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }                  
+      
+  floating_ip_logstash1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }                        
+
+#                 
+#   Linking floating ips with servers
+#                 
+
+  association_master1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_master1 }   
+      server_id: { get_resource: master1 }
+      
+  association_master2:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_master2 }
+      server_id: { get_resource: master2 }
+      
+  association_master3:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_master3 }
+      server_id: { get_resource: master3 }
+      
+  association_kibana1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_kibana1 }
+      server_id: { get_resource: kibana1 }      
+      
+  association_logstash1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_logstash1 }
+      server_id: { get_resource: logstash1 }            
+
+#                 
+#   Internal Ip allocations; 
+#   static ips for ES masters, 
+#   ES Data and Index Nodes, Kibana and Logstash getting ip from openstack dhcp
+#                 
+
+  instance_port_master1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name }
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: first_master_internal_ip } } ]
+      
+  instance_port_master2:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name }
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: second_master_internal_ip } } ]
+      
+  instance_port_master3:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: third_master_internal_ip } } ]
+      
+  instance_port_data1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }     
+        
+  instance_port_data2:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }      
+        
+  instance_port_data3:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }       
+        
+  instance_port_index1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }     
+        
+  instance_port_index2:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }
+        
+  instance_port_kibana1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }          
+        
+  instance_port_logstash1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }                          
+
+#                 
+#   Server Provisions
+#                 
+
+  master1:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: elastic-master
+      name: 
+        str_replace:
+          template: $PART_CL-master-1
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: flavor_name } 
+      image: { get_param: image_name } 
+      networks:
+        - port: { get_resource: instance_port_master1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_master
+   
+       
+  master2:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: elastic-master
+      name: 
+        str_replace:
+          template: $PART_CL-master-2
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: flavor_name } 
+      image: { get_param: image_name } 
+      networks:
+        - port: { get_resource: instance_port_master2 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_master
+       
+
+  master3:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: elastic-master
+      name: 
+        str_replace:
+          template: $PART_CL-master-3
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_master3 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_master
+             
+  data1:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]
+    properties:
+      metadata:
+        type: elastic-data
+      name: 
+        str_replace:
+          template: $PART_CL-data-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_data1 }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_data1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_data
+       
+  data2:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]    
+    properties:
+      metadata:
+        type: elastic-data
+      name: 
+        str_replace:
+          template: $PART_CL-data-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_data2 }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_data2 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_data
+       
+  data3:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]    
+    properties:
+      metadata:
+        type: elastic-data
+      name: 
+        str_replace:
+          template: $PART_CL-data-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_data3 }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_data3 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_data
+       
+  index1:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]    
+    properties:
+      metadata:
+        type: elastic-index
+      name: 
+        str_replace:
+          template: $PART_CL-index-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_index1 }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_index1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_index
+       
+  index2:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]    
+    properties:
+      metadata:
+        type: elastic-index
+      name: 
+        str_replace:
+          template: $PART_CL-index-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_index2 }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_index2 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_index
+  
+  
+  kibana1:
+    type: OS::Nova::Server
+    depends_on: [ index1, index2 ]
+    properties:
+      metadata:
+        type: kibana
+      name: 
+        str_replace:
+          template: $PART_CL-kibana-1
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_kibana1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_kibana
+       
+  logstash1:
+    type: OS::Nova::Server
+    depends_on: [ data1, data2, data3 ]
+    properties:
+      metadata:
+        type: logstash
+      name: 
+        str_replace:
+          template: $PART_CL-logstash-1
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: flavor_name }
+      image: { get_param: image_name }
+      networks:
+        - port: { get_resource: instance_port_logstash1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_logstash
+       
+         
+#                 
+#   Instances Customization for ES, Kibana and Logstash via Cloud-Config
+#                 
+  
+  cloud_init_userdata_master:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_master}
+
+  cloud_config_master:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /etc/sysctl.d/elastic.conf
+          permissions: "0644"
+          content: |
+                vm.max_map_count=262144
+        - path: /etc/security/limits.d/elastic.conf
+          content: |
+                elastic         soft    nofile          65536
+                elastic         hard    nofile          65536
+                elastic soft memlock unlimited
+                elastic hard memlock unlimited
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __master1ip__: {get_param: first_master_internal_ip }
+               __master2ip__: {get_param: second_master_internal_ip }
+               __master3ip__: {get_param: third_master_internal_ip }
+               __heap__: {get_param: java_heap_space }
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __clustername__: { get_param: esearch_cluster_name }
+               __mountpoint__: {get_param: elastic.tar.gz_file_nfs_mount_point }
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                ES_PATH="/home/app/elastic/elasticsearch"
+                ES_DATA_PATHS="/home/app/elastic/data01, /home/app/elastic/data02, /home/app/elastic/data03"
+                ES_LOG_PATHS="/home/app/elastic/logs"                
+                JAVA_PATH="/home/app/java/jdk1.8/jre"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts                
+                echo "__master1ip__ __clustername__-master-1" >> /etc/hosts
+                echo "__master2ip__ __clustername__-master-2" >> /etc/hosts
+                echo "__master3ip__ __clustername__-master-3" >> /etc/hosts
+                mkdir /home/app; useradd -u 1112 -md /home/app/elastic elastic
+                sysctl -p /etc/sysctl.d/elastic.conf
+                mount __mountpoint__ /mnt
+                tar xf /mnt/elastic.tar.gz -C /
+                umount /mnt
+                sed -i 's/securerandom.source=file:\/dev\/random/securerandom.source=file:\/dev\/urandom/g' $JAVA_PATH/lib/security/java.security
+                sed -i '63a\# Added by cloud-init' $ES_PATH/bin/elasticsearch
+                sed -i '64a\JAVA_HOME='$JAVA_PATH $ES_PATH/bin/elasticsearch
+                sed -i 's/-Xms2g/-Xms__heap__/g' $ES_PATH/config/jvm.options
+                sed -i 's/-Xmx2g/-Xmx__heap__/g' $ES_PATH/config/jvm.options
+                sed -i '17a\cluster.name: __clustername__' $ES_PATH/config/elasticsearch.yml
+                sed -i '56a\network.host: '$(hostname -s) $ES_PATH/config/elasticsearch.yml
+                sed -i '24a\node.name: '$(hostname -s) $ES_PATH/config/elasticsearch.yml
+                echo "path.data: $ES_DATA_PATHS" >> $ES_PATH/config/elasticsearch.yml
+                echo "path.logs: $ES_LOG_PATHS" >> $ES_PATH/config/elasticsearch.yml                
+                echo "xpack.security.enabled: false" >> $ES_PATH/config/elasticsearch.yml               
+                echo -e "node.master: true\nnode.data: false\nnode.ingest: false" >> $ES_PATH/config/elasticsearch.yml
+                sed -i 's/#discovery.zen.ping.unicast.hosts: \["host1", "host2"\]/discovery.zen.ping.unicast.hosts: ["__master1ip__", "__master2ip__","__master3ip__"]/g' $ES_PATH/config/elasticsearch.yml
+                chown elastic:elastic -R /home/app
+                sudo -H -u elastic bash -c '/home/app/elastic/elasticsearch/bin/elasticsearch -d'
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+       
+  cloud_init_userdata_data:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_data}
+
+  cloud_config_data:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /etc/sysctl.d/elastic.conf
+          permissions: "0644"
+          content: |
+                vm.max_map_count=262144
+        - path: /etc/security/limits.d/elastic.conf
+          content: |
+                elastic         soft    nofile          65536
+                elastic         hard    nofile          65536
+                elastic soft memlock unlimited
+                elastic hard memlock unlimited
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __master1ip__: {get_param: first_master_internal_ip }
+               __master2ip__: {get_param: second_master_internal_ip }
+               __master3ip__: {get_param: third_master_internal_ip }
+               __heap__: {get_param: java_heap_space }
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __clustername__: { get_param: esearch_cluster_name }
+               __mountpoint__: {get_param: elastic.tar.gz_file_nfs_mount_point }
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                ES_PATH="/home/app/elastic/elasticsearch"
+                ES_DATA_PATHS="/home/app/elastic/data01, /home/app/elastic/data02, /home/app/elastic/data03"
+                ES_LOG_PATHS="/home/app/elastic/logs"
+                JAVA_PATH="/home/app/java/jdk1.8/jre"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts                
+                echo "__master1ip__ master1" >> /etc/hosts
+                echo "__master2ip__ master2" >> /etc/hosts
+                echo "__master3ip__ master3" >> /etc/hosts
+                mkdir /home/app; useradd -u 1112 -md /home/app/elastic elastic
+                sysctl -p /etc/sysctl.d/elastic.conf
+                mount __mountpoint__ /mnt
+                tar xf /mnt/elastic.tar.gz -C /
+                umount /mnt                    
+                sed -i 's/securerandom.source=file:\/dev\/random/securerandom.source=file:\/dev\/urandom/g' $JAVA_PATH/lib/security/java.security
+                sed -i '63a\# Added by cloud-init' $ES_PATH/bin/elasticsearch
+                sed -i '64a\JAVA_HOME='$JAVA_PATH $ES_PATH/bin/elasticsearch
+                sed -i 's/-Xms2g/-Xms__heap__/g' $ES_PATH/config/jvm.options
+                sed -i 's/-Xmx2g/-Xmx__heap__/g' $ES_PATH/config/jvm.options
+                sed -i '17a\cluster.name: __clustername__' $ES_PATH/config/elasticsearch.yml
+                sed -i '56a\network.host: '$(hostname -s) $ES_PATH/config/elasticsearch.yml
+                sed -i '24a\node.name: '$(hostname -s) $ES_PATH/config/elasticsearch.yml
+                echo "path.data: $ES_DATA_PATHS" >> $ES_PATH/config/elasticsearch.yml
+                echo "path.logs: $ES_LOG_PATHS" >> $ES_PATH/config/elasticsearch.yml                
+                echo "xpack.security.enabled: false" >> $ES_PATH/config/elasticsearch.yml                               
+                echo -e "node.master: false\nnode.data: true\nnode.ingest: false" >> $ES_PATH/config/elasticsearch.yml
+                sed -i 's/#discovery.zen.ping.unicast.hosts: \["host1", "host2"\]/discovery.zen.ping.unicast.hosts: ["__master1ip__", "__master2ip__","__master3ip__"]/g' $ES_PATH/config/elasticsearch.yml              
+                chown elastic:elastic -R /home/app
+                sudo -H -u elastic bash -c '/home/app/elastic/elasticsearch/bin/elasticsearch -d'
+                        
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+       
+  cloud_init_userdata_index:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_index}
+
+  cloud_config_index:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /etc/sysctl.d/elastic.conf
+          permissions: "0644"
+          content: |
+                vm.max_map_count=262144
+        - path: /etc/security/limits.d/elastic.conf
+          content: |
+                elastic         soft    nofile          65536
+                elastic         hard    nofile          65536
+                elastic soft memlock unlimited
+                elastic hard memlock unlimited
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __master1ip__: {get_param: first_master_internal_ip }
+               __master2ip__: {get_param: second_master_internal_ip }
+               __master3ip__: {get_param: third_master_internal_ip }
+               __heap__: {get_param: java_heap_space }
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __clustername__: { get_param: esearch_cluster_name }
+               __mountpoint__: {get_param: elastic.tar.gz_file_nfs_mount_point }          
+               __wc_notify__: { get_attr: [wait_handle, curl_cli] }               
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                ES_PATH="/home/app/elastic/elasticsearch"
+                ES_DATA_PATHS="/home/app/elastic/data01, /home/app/elastic/data02, /home/app/elastic/data03"
+                ES_LOG_PATHS="/home/app/elastic/logs"
+                JAVA_PATH="/home/app/java/jdk1.8/jre"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts                
+                echo "__master1ip__ master1" >> /etc/hosts
+                echo "__master2ip__ master2" >> /etc/hosts
+                echo "__master3ip__ master3" >> /etc/hosts
+                mkdir /home/app; useradd -u 1112 -md /home/app/elastic elastic
+                sysctl -p /etc/sysctl.d/elastic.conf
+                mount __mountpoint__ /mnt
+                tar xf /mnt/elastic.tar.gz -C /
+                sed -i 's/securerandom.source=file:\/dev\/random/securerandom.source=file:\/dev\/urandom/g' $JAVA_PATH/lib/security/java.security
+                sed -i '63a\# Added by cloud-init' $ES_PATH/bin/elasticsearch
+                sed -i '64a\JAVA_HOME='$JAVA_PATH $ES_PATH/bin/elasticsearch
+                sed -i 's/-Xms2g/-Xms__heap__/g' $ES_PATH/config/jvm.options
+                sed -i 's/-Xmx2g/-Xmx__heap__/g' $ES_PATH/config/jvm.options
+                sed -i '17a\cluster.name: __clustername__' $ES_PATH/config/elasticsearch.yml
+                sed -i '56a\network.host: '$(hostname -s) $ES_PATH/config/elasticsearch.yml
+                sed -i '24a\node.name: '$(hostname -s) $ES_PATH/config/elasticsearch.yml
+                echo "path.data: $ES_DATA_PATHS" >> $ES_PATH/config/elasticsearch.yml
+                echo "path.logs: $ES_LOG_PATHS" >> $ES_PATH/config/elasticsearch.yml
+                echo "xpack.security.enabled: false" >> $ES_PATH/config/elasticsearch.yml
+                echo -e "node.master: false\nnode.data: false\nnode.ingest: true" >> $ES_PATH/config/elasticsearch.yml
+                sed -i 's/#discovery.zen.ping.unicast.hosts: \["host1", "host2"\]/discovery.zen.ping.unicast.hosts: ["__master1ip__", "__master2ip__","__master3ip__"]/g' $ES_PATH/config/elasticsearch.yml              
+                chown elastic:elastic -R /home/app
+                sudo -H -u elastic bash -c '/home/app/elastic/elasticsearch/bin/elasticsearch -d'
+                for i in {1..60}; do 
+                  if [ "$(curl -s -XGET "http://$IPADDR:9200")" ]; then 
+                    echo "This Index node is up, applying license"
+                    curl -XPUT -u elastic:changeme "http://__master1ip__:9200/_xpack/license" -d @/mnt/license.json
+                    curl -XPUT -u elastic:changeme "http://__master1ip__:9200/_xpack/license?acknowledge=true" -d @/mnt/license.json
+                    umount /mnt                
+                    echo "Elastic Cluster licensed, sending SUCCESS signal to Heat stack"
+                    __wc_notify__ --data-binary '{"status": "SUCCESS"}'
+                    break
+                  else 
+                    echo "try $i, http://$IPADDR:9200 unreachable"
+                    sleep 5
+                    if [ "$i" == 60 ]; then
+                      umount /mnt                                      
+                      echo "Failed licensing Elastic Cluster, sending FAILURE signal to Heat stack"
+                      __wc_notify__ --data-binary '{"status": "FAILURE"}'
+                      break
+                    fi
+                  fi
+                done         
+                     
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"       
+       
+       
+  cloud_init_userdata_kibana:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_kibana}
+
+  cloud_config_kibana:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /etc/sysctl.d/elastic.conf
+          permissions: "0644"
+          content: |
+                vm.max_map_count=262144
+        - path: /etc/security/limits.d/elastic.conf
+          content: |
+                elastic         soft    nofile          65536
+                elastic         hard    nofile          65536
+                elastic soft memlock unlimited
+                elastic hard memlock unlimited
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __heap__: {get_param: java_heap_space }
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __esingestip__: {get_param: ES_INDEX_VIP }
+               __mountpoint__: {get_param: kibana.tar.gz_file_nfs_mount_point }
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                KB_PATH="/home/app/kibana/kibana"
+                JAVA_PATH="/home/app/java/jdk1.8/jre"
+                MOUNT_POINT="__mountpoint__"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts
+                mkdir /home/app; useradd -u 1112 -md /home/app/elastic elastic
+                sysctl -p /etc/sysctl.d/elastic.conf
+                mount $MOUNT_POINT /mnt
+                tar zxf /mnt/kibana.tar.gz -C /
+                umount /mnt                        
+                sed -i 's/securerandom.source=file:\/dev\/random/securerandom.source=file:\/dev\/urandom/g' $JAVA_PATH/lib/security/java.security
+                sed -i 's/#server.host: "localhost"/server.host: "'$(hostname)'"/g' $KB_PATH/config/kibana.yml
+                sed -i 's/#elasticsearch.url: "http:\/\/localhost:9200"/elasticsearch.url: "http:\/\/__esingestip__:9200"/g' $KB_PATH/config/kibana.yml
+                echo "xpack.security.enabled: false" >> $KB_PATH/config/kibana.yml
+                chown elastic:elastic -R /home/app
+                sudo -H -u elastic bash -c "nohup $KB_PATH/bin/kibana > $KB_PATH/kibana.out 2>&1 &"
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+       
+  cloud_init_userdata_logstash:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_logstash}
+
+  cloud_config_logstash:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /etc/sysctl.d/elastic.conf
+          permissions: "0644"
+          content: |
+                vm.max_map_count=262144
+        - path: /etc/security/limits.d/elastic.conf
+          content: |
+                elastic         soft    nofile          65536
+                elastic         hard    nofile          65536
+                elastic soft memlock unlimited
+                elastic hard memlock unlimited
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __heap__: {get_param: java_heap_space }
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __esdataip__: {get_param: ES_DATA_VIP }
+               __mountpoint__: {get_param: logstash.tar.gz_file_nfs_mount_point }
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                LS_PATH="/home/app/logstash/logstash"
+                JAVA_PATH="/home/app/java/jdk1.8/jre"
+                MOUNT_POINT="__mountpoint__"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts
+                mkdir /home/app; useradd -u 1112 -md /home/app/elastic elastic
+                sysctl -p /etc/sysctl.d/elastic.conf
+                mount $MOUNT_POINT /mnt
+                tar zxf /mnt/logstash.tar.gz -C /
+                sed -i 's/securerandom.source=file:\/dev\/random/securerandom.source=file:\/dev\/urandom/g' $JAVA_PATH/lib/security/java.security
+                sed -i '20a\# Added by cloud-init' $LS_PATH/bin/logstash
+                sed -i '21a\JAVA_HOME='$JAVA_PATH $LS_PATH/bin/logstash
+                sed -i 's/-Xms256m/-Xms__heap__/g' $LS_PATH/config/jvm.options
+                sed -i 's/-Xmx1g/-Xmx__heap__/g' $LS_PATH/config/jvm.options
+                cp /mnt/logstash-pipeline.conf $LS_PATH/logstash-pipeline.conf
+                sed -i 's/ELASTIC_IP_HERE/__esdataip__:9200/g' $LS_PATH/logstash-pipeline.conf
+                chown elastic:elastic -R /home/app
+                umount /mnt                
+                sudo -H -u elastic bash -c "nohup $LS_PATH/bin/logstash -f $LS_PATH/logstash-pipeline.conf > $LS_PATH/logstash.out 2>&1 &"
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+       

@@ -1,0 +1,224 @@
+heat_template_version: 2016-04-08
+description: |
+  This heat template is used to provision basic cloud images
+  with desired configuration.
+
+#                 #
+#   Parameters    #
+#                 #
+
+parameters:
+  esearch_cluster_name:
+    type: string
+  master_node_selection:
+    type: string
+    description: select master node (master-1, master-2, master-3)
+    constraints:
+     - allowed_values: [ 'master-1', 'master-2', 'master-3' ]
+  master_node_internal_ip:
+    type: string    
+  first_master_internal_ip:
+    type: string
+  second_master_internal_ip:
+    type: string
+  third_master_internal_ip:
+    type: string
+  java_heap_space:
+    type: string
+    description: Xmx and Xms size of elastic (i.e. 768m)
+  elastic.tar.gz_file_nfs_mount_point:
+    type: string
+    description: nfsserver:/path/to/targzfile/
+  domain:
+    type: string
+  ns1:
+    type: string
+  ns2:
+    type: string
+  ntp1:
+    type: string
+  external_network_name:
+    type: string
+  internal_network_name:
+    type: string
+  internal_network_subnet_name:
+    type: string
+  security_group:
+    type: string
+  key_pair_name:
+    type: string
+  flavor_name:
+    type: string
+  image_name:
+    type: string
+    
+
+
+resources:
+#                 
+#   Floating IP allocation for ES master nodes
+#                 
+      
+  floating_ip_master1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }
+      
+
+
+#                 
+#   Linking floating ips with servers
+#                 
+
+  association_master1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_master1 }   
+      server_id: { get_resource: master1 }
+      
+
+
+
+#                 
+#   Internal Ip allocations; 
+#   static ips for ES masters, 
+#                 
+
+  instance_port_master1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name }
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: master_node_internal_ip } } ]
+      
+#                 
+#   Server Provisions
+#                 
+
+  master1:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: elastic-master
+      name: 
+        str_replace:
+          template: $PART_CL-$PART_NODE
+          params:
+            $PART_NODE: {get_param: master_node_selection }
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: flavor_name } 
+      image: { get_param: image_name } 
+      networks:
+        - port: { get_resource: instance_port_master1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_master
+   
+#                 
+#   Instances Customization for ES via Cloud-Config
+#                 
+  
+  cloud_init_userdata_master:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_master}
+
+  cloud_config_master:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /etc/sysctl.d/elastic.conf
+          permissions: "0644"
+          content: |
+                vm.max_map_count=262144
+        - path: /etc/security/limits.d/elastic.conf
+          content: |
+                elastic         soft    nofile          65536
+                elastic         hard    nofile          65536
+                elastic soft memlock unlimited
+                elastic hard memlock unlimited
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __master1ip__: {get_param: first_master_internal_ip }
+               __master2ip__: {get_param: second_master_internal_ip }
+               __master3ip__: {get_param: third_master_internal_ip }
+               __heap__: {get_param: java_heap_space }
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __clustername__: { get_param: esearch_cluster_name }
+               __mountpoint__: {get_param: elastic.tar.gz_file_nfs_mount_point }
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                ES_PATH="/home/app/elastic/elasticsearch"
+                ES_DATA_PATHS="/home/app/elastic/data01, /home/app/elastic/data02, /home/app/elastic/data03"
+                ES_LOG_PATHS="/home/app/elastic/logs"                
+                JAVA_PATH="/home/app/java/jdk1.8/jre"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts                
+                echo "__master1ip__ __clustername__-master-1" >> /etc/hosts
+                echo "__master2ip__ __clustername__-master-2" >> /etc/hosts
+                echo "__master3ip__ __clustername__-master-3" >> /etc/hosts
+                mkdir /home/app; useradd -u 1112 -md /home/app/elastic elastic
+                sysctl -p /etc/sysctl.d/elastic.conf
+                mount __mountpoint__ /mnt
+                tar xf /mnt/elastic.tar.gz -C /
+                umount /mnt
+                sed -i 's/securerandom.source=file:\/dev\/random/securerandom.source=file:\/dev\/urandom/g' $JAVA_PATH/lib/security/java.security
+                sed -i '63a\# Added by cloud-init' $ES_PATH/bin/elasticsearch
+                sed -i '64a\JAVA_HOME='$JAVA_PATH $ES_PATH/bin/elasticsearch
+                sed -i 's/-Xms2g/-Xms__heap__/g' $ES_PATH/config/jvm.options
+                sed -i 's/-Xmx2g/-Xmx__heap__/g' $ES_PATH/config/jvm.options
+                sed -i '17a\cluster.name: __clustername__' $ES_PATH/config/elasticsearch.yml
+                sed -i '56a\network.host: '$(hostname -s) $ES_PATH/config/elasticsearch.yml
+                sed -i '24a\node.name: '$(hostname -s) $ES_PATH/config/elasticsearch.yml
+                echo "path.data: $ES_DATA_PATHS" >> $ES_PATH/config/elasticsearch.yml
+                echo "path.logs: $ES_LOG_PATHS" >> $ES_PATH/config/elasticsearch.yml                
+                echo "xpack.security.enabled: false" >> $ES_PATH/config/elasticsearch.yml               
+                echo -e "node.master: true\nnode.data: false\nnode.ingest: false" >> $ES_PATH/config/elasticsearch.yml
+                sed -i 's/#discovery.zen.ping.unicast.hosts: \["host1", "host2"\]/discovery.zen.ping.unicast.hosts: ["__master1ip__", "__master2ip__","__master3ip__"]/g' $ES_PATH/config/elasticsearch.yml
+                echo "xpack.security.enabled: false" >> $ES_PATH/config/elasticsearch.yml
+                chown elastic:elastic -R /home/app
+                sudo -H -u elastic bash -c '/home/app/elastic/elasticsearch/bin/elasticsearch -d'
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+       
+
+  
