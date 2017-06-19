@@ -1,0 +1,265 @@
+heat_template_version: 2016-04-08
+description: |
+  This heat template is used to provision basic cloud images
+  with desired configuration.
+
+#                 #
+#   Parameters    #
+#                 #
+
+parameters:
+  app_server_hostname:
+   type: string
+   default: appserver
+  db_server_hostname:
+   type: string
+   default: dbserver
+  app_server_image_name:
+   type: string
+  db_server_image_name:
+   type: string
+  domain:
+    type: string
+  ns1:
+    type: string
+  ns2:
+    type: string
+  ntp1:
+    type: string
+  external_network_name:
+    type: string
+  app_network_name:
+    type: string
+  app_network_subnet_name:
+    type: string
+  db_network_name:
+    type: string
+  db_network_subnet_name:
+    type: string
+  security_group:
+    type: string
+  key_pair_name:
+    type: string
+  flavor_name:
+    type: string
+
+resources:
+#                 
+#   Floating IP allocation 
+#                 
+      
+  floating_ip_app1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }
+      
+      
+  floating_ip_db1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }      
+
+
+#                 
+#   Linking floating ips with servers
+#                 
+
+  association_app1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_app1 }   
+      server_id: { get_resource: app1 }
+      
+  association_db1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_db1 }   
+      server_id: { get_resource: db1 }      
+      
+
+#                 
+#   Internal Ip allocations; 
+#                 
+
+  instance_port_app1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: app_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: app_network_subnet_name }     
+        
+  instance_port_db1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: db_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: db_network_subnet_name }           
+      
+#                 
+#   Server Provisions
+#                 
+
+  app1:
+    type: OS::Nova::Server
+    depends_on: [ db1 ]
+    properties:
+      name: 
+        str_replace:
+          template: $HOSTNAME
+          params:
+            $HOSTNAME: {get_param: app_server_hostname }
+      flavor: { get_param: flavor_name } 
+      image: { get_param: app_server_image_name } 
+      networks:
+        - port: { get_resource: instance_port_app1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_app1
+       
+  db1:
+    type: OS::Nova::Server
+    properties:
+      name: 
+        str_replace:
+          template: $HOSTNAME
+          params:
+            $HOSTNAME: {get_param: db_server_hostname }
+      flavor: { get_param: flavor_name } 
+      image: { get_param: db_server_image_name } 
+      networks:
+        - port: { get_resource: instance_port_db1 }
+      key_name: {get_param: key_pair_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_db1      
+   
+#                 
+#   Instances Customization 
+#                 
+  
+  cloud_init_userdata_app1:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_app1}
+
+  cloud_config_app1:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __dbipaddr__: {get_attr: [db1, first_address]}
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts
+                sed -i s/database_name_here/wordpress/ /var/www/html/wp-config.php
+                sed -i s/username_here/wordpressuser/      /var/www/html/wp-config.php
+                sed -i s/password_here/red83lera/  /var/www/html/wp-config.php
+                sed -i s/localhost/__dbipaddr__/        /var/www/html/wp-config.php
+                systemctl start httpd
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+       
+       
+  cloud_init_userdata_db1:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_db1}
+
+  cloud_config_db1:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts
+                systemctl start mariadb
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"

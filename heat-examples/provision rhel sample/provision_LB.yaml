@@ -1,0 +1,58 @@
+heat_template_version: 2013-05-23
+
+description: |
+  This heat template is used to provision basic cloud images
+  with desired configuration.
+
+parameters:
+  LB name:
+    type: string
+    description: for ex. apache-lb, tomcat-lb
+  LB IP:
+    type: string
+  Front Port:
+    type: string
+  Redirect Port:
+    type: string
+  internal network subnet name:
+    type: string
+  external network name:
+    type: string
+
+resources:
+  monitor:
+    type: OS::Neutron::HealthMonitor
+    properties:
+      type: HTTP
+      delay: 45
+      max_retries: 5
+      timeout: 30
+
+  pool:
+    type: OS::Neutron::Pool
+    properties:
+      name: { get_param: LB name }
+      protocol: HTTP
+      subnet_id: { get_param: internal network subnet name }
+      lb_method: ROUND_ROBIN
+      monitors: [ { get_resource: monitor } ]
+      vip:
+        name: front_vip
+        address: { get_param: LB IP }
+        description: Front-end virtual IP (VIP)
+        protocol_port: { get_param: Front Port }
+
+  lbaas:
+    type: OS::Neutron::LoadBalancer
+    properties: 
+      pool_id: { get_resource: pool }
+      protocol_port: { get_param: Redirect Port }
+      
+
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: external network name }
+      port_id: { get_attr: [pool, vip, port_id ]}
+  
+

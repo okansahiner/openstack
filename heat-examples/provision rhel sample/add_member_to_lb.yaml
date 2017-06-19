@@ -1,0 +1,169 @@
+heat_template_version: 2016-04-08
+description: |
+  This heat template is used to provision basic cloud images
+  with desired configuration.
+
+#                 #
+#   Parameters    #
+#                 #
+
+parameters:
+  LB Pool ID:
+    type: string
+  Redirect Port:
+    type: string
+  hostname:
+   type: string
+  domain:
+    type: string
+  ns1:
+    type: string
+  ns2:
+    type: string
+  ntp1:
+    type: string
+  external network name:
+    type: string
+  internal network name:
+    type: string
+  internal network subnet name:
+    type: string
+  security group:
+    type: string
+  key pair name:
+    type: string
+  flavor name:
+    type: string
+  image name:
+    type: string
+    
+
+
+resources:
+#                 
+#   Adding instances behind Load Balancers
+#      
+  member_add:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { get_param: LB Pool ID }
+      address: {get_attr: [instance1, first_address]}
+      protocol_port: {get_param: Redirect Port }
+#                 
+#   Floating IP allocation 
+#                 
+      
+  floating_ip:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external network name }
+      
+#                 
+#   Linking floating ips with servers
+#                 
+
+  association:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip }   
+      server_id: { get_resource: instance1 }
+      
+#                 
+#   Internal Ip allocations; 
+#                 
+
+  instance_port:
+    type: OS::Neutron::Port
+  properties:
+      network: { get_param: internal network name } 
+      security_groups:
+        - { get_param: security group }
+      fixed_ips:
+        - subnet_id: { get_param: internal network subnet name }     
+      
+#                 
+#   Server Provisions
+#                 
+
+  instance1:
+    type: OS::Nova::Server
+    properties:
+      name: 
+        str_replace:
+          template: $HOSTNAME
+          params:
+            $HOSTNAME: {get_param: hostname }
+      flavor: { get_param: flavor name } 
+      image: { get_param: image name } 
+      networks:
+        - port: { get_resource: instance_port }
+      key_name: {get_param: key pair name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata
+   
+#                 
+#   Instances Customization 
+#                 
+  
+  cloud_init_userdata:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config}
+
+  cloud_config:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /etc/chrony.conf
+          permissions: "0644"
+          content:
+             str_replace:
+              params:
+               __osntp1__: { get_param: ntp1 }
+              template: |
+                server __osntp1__ iburst
+                stratumweight 0
+                driftfile /var/lib/chrony/drift
+                rtcsync
+                makestep 10 3
+                bindcmdaddress 127.0.0.1
+                bindcmdaddress ::1
+                keyfile /etc/chrony.keys
+                commandkey 1
+                generatecommandkey
+                noclientlog
+                logchange 0.5
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+               __osns1__: { get_param: ns1 }
+               __osns2__: { get_param: ns2 }
+               __osdomain__: { get_param: domain }
+               __port__: {get_param: Redirect Port }
+              template: |
+                #!/bin/bash
+                IPADDR="$(nmcli c s 'System eth0'|grep 'IP4.ADDRESS'|awk '{print $2}'|cut -d/ -f1)"
+                timedatectl set-timezone Europe/Istanbul
+                nmcli con mod 'System eth0' ipv4.ignore-auto-dns yes
+                nmcli con mod 'System eth0' ipv4.dns-search __osdomain__
+                nmcli con mod 'System eth0' +ipv4.dns __osns1__
+                nmcli con mod 'System eth0' +ipv4.dns __osns2__
+                nmcli con up 'System eth0'
+                hostnamectl set-hostname $(hostname -s).__osdomain__
+                systemctl restart chronyd
+                echo "$IPADDR $(hostname) $(hostname -s)" >> /etc/hosts
+                echo $(hostname) > /index.html
+                nohup python -m SimpleHTTPServer __port__ &
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+       
+
+  
