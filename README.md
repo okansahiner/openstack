@@ -2,11 +2,11 @@
 
 This repository includes some infrastructure automation definitions written by Heat for Openstack. 
 
-<h1>ELK Stack<h1>
+## ELK Stack
 
 First example is about creating and extending elastic search cluster with following features;
 
-<h2>1. provision_ha_elk_cluster.yaml<h2> 
+### 1. provision_ha_elk_cluster.yaml
 * It creates ELK cluster with
 * 3 elastic masters,
 * 3 elastic data,
