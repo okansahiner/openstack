@@ -2,24 +2,25 @@
 
 This repository includes some infrastructure automation definitions written by Heat for Openstack. 
 
-<h1>ELK Stack
+<h1>ELK Stack<h1>
 
 First example is about creating and extending elastic search cluster with following features;
 
-<h2> 1. provision_ha_elk_cluster.yaml
-It creates ELK cluster with
-3 elastic masters,
-3 elastic data,
-2 elastic ingest nodes, 
-1 logstash and 1 kibana servers.
+<h2>1. provision_ha_elk_cluster.yaml<h2> 
+* It creates ELK cluster with
+* 3 elastic masters,
+* 3 elastic data,
+* 2 elastic ingest nodes, 
+* 1 logstash and 1 kibana servers.
+
 Before creating this stack, make sure that project has,
-It's own router, internal and external network, 
-Key-pair, 
-OS image (tested on RHEL7, CentOS7 should be OK too), 
-Security group (ingress port tcp 5601 for kibana, desired port for logstash, tcp 9200 and 9300 for elastic)
-Accessible NFS server that holds most recent elastic search, kibana and logstash tarballs.
-OS should have jdk for Elastic and Logstash, so it can be added into tarballs.
-logstash.conf and license.json file should be placed in NFS server.
+* It's own router, internal and external network, 
+* Key-pair, 
+* OS image (tested on RHEL7, CentOS7 should be OK too), 
+* Security group (ingress port tcp 5601 for kibana, desired port for logstash, tcp 9200 and 9300 for elastic)
+* Accessible NFS server that holds most recent elastic search, kibana and logstash tarballs.
+* OS should have jdk for Elastic and Logstash, so it can be added into tarballs.
+- logstash.conf and license.json file should be placed in NFS server.
 
 No need to allocate Floating IP, yaml allocates while creating stack.
 
