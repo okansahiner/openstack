@@ -2,10 +2,11 @@
 
 This repository includes some infrastructure automation definitions written by Heat for Openstack. 
 
-*[ELK Stack](https://github.com/okansahiner/openstack#elk-stack)
-*[Cassandra Stack](https://github.com/okansahiner/openstack#cassandra-stack)
-*[Wordpress Stack](https://github.com/okansahiner/openstack#wordpress-stack)
-*[RHEL Sample Stack](https://github.com/okansahiner/openstack#rhel-sample-stack)
+* [ELK Stack](https://github.com/okansahiner/openstack#elk-stack)
+* [Cassandra Stack](https://github.com/okansahiner/openstack#cassandra-stack)
+* [Wordpress Stack](https://github.com/okansahiner/openstack#wordpress-stack)
+* [RHEL Sample Stack](https://github.com/okansahiner/openstack#rhel-sample-stack)
+
 
 ## ELK Stack
 
