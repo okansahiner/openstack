@@ -19,7 +19,9 @@ It creates ELK cluster with
 * 3 elastic masters,
 * 3 elastic data,
 * 2 elastic ingest nodes, 
-* 1 logstash and 1 kibana servers.
+* 1 logstash and 1 kibana servers,
+* Openstack LB for EL Data Pool,
+* Openstack LB for EL Index Pool.
 
 Before creating this stack, make sure that project has,
 * It's own router, internal and external network, 
@@ -45,7 +47,33 @@ Creates new Kibana node. Cloud-init service configures Kibana, Openstack elastic
 Creates new Logstash node. Cloud-init service configures Logstash, Openstack elastic-data LB IP is added to Logstash configuration. It sends data to  Openstack elastic-data LB, not directly to data node(s), so probablity of losing connection to Elastic Search cluster due to the failure of data node(s) that configured in Logstash is eleminated.
 
 #### 6. repair_master_node.yaml
-Provisions master node in case of master failures.
+Provisions master node in case of master failures. Replaces new master instead of failed one.
+
+## Cassandra Stack
+
+This example is about creating and extending Cassandra cluster with following features;
+
+#### 1. provision_cluster.yaml
+
+![](images/cassandra_topology.png?raw=true)
+
+It creates Cassandra cluster with
+* 2 cassandra seeds,
+* 2 cassandra nodes,
+* Openstack LB for Cassandra instances.
+
+Before creating this stack, make sure that project has,
+* It's own router, internal and external network, 
+* Key-pair, 
+* OS image (tested on RHEL7, CentOS7 should be OK too), 
+* Security group (ingress port tcp 9042 for cql , 7000 for internode communication)
+* Accessible NFS server that holds most recent Cassandra tarballs.
+* OS should have jdk for Cassandra, so it can be added into tarballs.
+
+No need to allocate Floating IP, yaml allocates while creating stack.
+
+#### 2. add_node.yaml
+Creates new cassandra node and adds it behind Openstack Cassandra LB that previously created with "provision_cassandra..yaml".
 
 
 
