@@ -51,12 +51,11 @@ Provisions master node in case of master failures. Replaces new master instead o
 
 ## Cassandra Stack
 
+![](images/cassandra_topology.png?raw=true)
+
 This example is about creating and extending Cassandra cluster with following features;
 
 #### 1. provision_cluster.yaml
-
-![](images/cassandra_topology.png?raw=true)
-
 It creates Cassandra cluster with
 * 2 cassandra seeds,
 * 2 cassandra nodes,
@@ -74,6 +73,27 @@ No need to allocate Floating IP, yaml allocates while creating stack.
 
 #### 2. add_node.yaml
 Creates new cassandra node and adds it behind Openstack Cassandra LB that previously created with "provision_cassandra..yaml".
+
+## Wordpress Stack
+
+![](images/wp_topology.png?raw=true)
+
+This example is about creating wordpress stack  with following features;
+
+#### 1. provision_wp.yaml
+It creates Wordpress stack with
+* 1 Application server instance,
+* 1 Database server instance.,
+
+Before creating this stack, make sure that project has,
+* It's own router, internal and external network, 
+* 2 Internal network can be used for app & db network isolation,
+* Key-pair, 
+* 2 OS images, Mysql installed and Apache+PHP+Wordpress installed,  (tested on RHEL7, CentOS7 should be OK too), 
+* Security group (ingress port tcp 80,443 and 3306)
+* Also, wp_first_install.sh curl script allows to configure Wordpress first initialization.
+
+No need to allocate Floating IP, yaml allocates while creating stack.
 
 
 
