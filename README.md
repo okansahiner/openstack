@@ -5,7 +5,7 @@ This repository includes some infrastructure automation definitions written by H
 * [ELK Stack](https://github.com/okansahiner/openstack#elk-stack)
 * [Cassandra Stack](https://github.com/okansahiner/openstack#cassandra-stack)
 * [Wordpress Stack](https://github.com/okansahiner/openstack#wordpress-stack)
-* [RHEL Sample Stack](https://github.com/okansahiner/openstack#rhel-sample-stack)
+* [Sample Stacks](https://github.com/okansahiner/openstack#sample-stacks)
 
 
 ## ELK Stack
@@ -83,17 +83,50 @@ This example is about creating wordpress stack  with following features;
 #### 1. provision_wp.yaml
 It creates Wordpress stack with
 * 1 Application server instance,
-* 1 Database server instance.,
+* 1 Database server instance,
 
 Before creating this stack, make sure that project has,
 * It's own router, internal and external network, 
-* 2 Internal network can be used for app & db network isolation,
+* 2 Internal networks can be used for app & db network isolation,
 * Key-pair, 
-* 2 OS images, Mysql installed and Apache+PHP+Wordpress installed,  (tested on RHEL7, CentOS7 should be OK too), 
+* 2 prepared OS templates , Mysql installed and Apache+PHP+Wordpress installed,  (tested on RHEL7, CentOS7 should be OK too), 
 * Security group (ingress port tcp 80,443 and 3306)
 * Also, wp_first_install.sh curl script allows to configure Wordpress first initialization.
 
 No need to allocate Floating IP, yaml allocates while creating stack.
+
+## Sample Stacks
+
+This example is about creating some sample stacks with following features;
+
+#### 1. provision_rhel7.yaml
+It creates RHEL7 instance with
+* key pair,
+* floating ip,
+* security group,
+* time server, name server configuration
+
+Before creating this stack, make sure that project has,
+* It's own router, internal and external network, 
+* Key-pair, 
+* OS image (tested on RHEL7, CentOS7 should be OK too), 
+* Security group (ingress port ssh for communication)
+
+No need to allocate Floating IP, yaml allocates while creating stack.
+
+#### 2. provision_LB.yaml
+
+It creates Openstack Load Balancer with following specs,
+* Front Port
+* Redirect Port
+* Floating IP attached to Virtual IP
+
+
+#### 3. add_member_to_lb.yaml
+
+It creates RHEL7 instance (same specs with provision_rhel7.yaml ) and adds it as a member of previously created  Load Balancer with provision_LB.yaml.
+
+
 
 
 
