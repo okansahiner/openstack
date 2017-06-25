@@ -4,6 +4,8 @@ This repository includes some infrastructure automation definitions written by H
 
 ## ELK Stack
 
+![](images/elk_topology.png?raw=true)
+
 First example is about creating and extending elastic search cluster with following features;
 
 #### 1. provision_ha_elk_cluster.yaml
