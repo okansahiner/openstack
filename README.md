@@ -36,6 +36,9 @@ Creates new Kibana node. Cloud-init service configures Kibana, Openstack elastic
 #### 5. add_logstash.yaml
 Creates new Logstash node. Cloud-init service configures Logstash, Openstack elastic-data LB IP is added to Logstash configuration. It sends data to  Openstack elastic-data LB, not directly to data node(s), so probablity of losing connection to Elastic Search cluster due to the failure of data node(s) that configured in Logstash is eleminated.
 
+#### 6. repair_master_node.yaml
+Provisions master node in case of master failures.
+
 
 
 
